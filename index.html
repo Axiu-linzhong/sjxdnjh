@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>三角形的内角和 · 严格180° · 缩放</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            display: flex;
+            height: 100vh;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #e6e6fa;
+            overflow: hidden;
+        }
+ 
+        /* 左侧信息栏 */
+        #sidebar {
+            width: 350px;
+            background-color: rgba(255, 255, 255, 0.4);
+            padding: 40px 30px;
+            box-shadow: 2px 0 10px rgba(0,0,0,0.1);
+            display: flex;
+            flex-direction: column;
+            font-size: 28px;
+            color: #333;
+        }
+ 
+        .angle-list { margin-bottom: 40px; }
+        .angle-list p { margin: 15px 0; }
+         
+        .formula-box {
+            background-color: rgba(255, 255, 255, 0.6);
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid #ccc;
+        }
+        .formula-box p { margin: 15px 0; }
+ 
+        /* 右侧画布区域 */
+        #canvas-container {
+            flex: 1;
+            position: relative;
+        }
+         
+        #title {
+            position: absolute;
+            top: 20px;
+            width: 100%;
+            text-align: center;
+            font-size: 24px;
+            font-weight: bold;
+            color: #333;
+            pointer-events: none;
+        }
+ 
+        canvas {
+            width: 100%;
+            height: 100%;
+            cursor: grab;
+            display: block;
+        }
+        canvas:active { cursor: grabbing; }
+ 
+        /* 右下角缩放按钮 */
+        .zoom-controls {
+            position: absolute;
+            bottom: 30px;
+            right: 30px;
+            display: flex;
+            gap: 12px;
+            z-index: 10;
+        }
+        .zoom-btn {
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.85);
+            border: 2px solid #4a90d9;
+            color: #2c3e50;
+            font-size: 32px;
+            font-weight: bold;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.15);
+            transition: all 0.2s ease;
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .zoom-btn:hover {
+            background: #4a90d9;
+            color: #fff;
+            border-color: #2c3e50;
+            transform: scale(1.05);
+        }
+        .zoom-btn:active {
+            transform: scale(0.95);
+        }
+        .zoom-btn:disabled {
+            opacity: 0.4;
+            pointer-events: none;
+            border-color: #aaa;
+        }
+    </style>
+</head>
+<body>
+ 
+    <div id="sidebar">
+        <div class="angle-list">
+            <p>∠1 = <span id="val1">--</span>°</p>
+            <p>∠2 = <span id="val2">--</span>°</p>
+            <p>∠3 = <span id="val3">--</span>°</p>
+        </div>
+        <div class="formula-box">
+            <p>∠1 + ∠2 + ∠3</p>
+            <p>= <span id="sum-expr">--</span></p>
+            <p>= 180°</p>
+        </div>
+    </div>
+ 
+    <div id="canvas-container">
+        <div id="title">三角形的内角和</div>
+        <canvas id="canvas"></canvas>
+        <!-- 右下角缩放按钮 -->
+        <div class="zoom-controls">
+            <div class="zoom-btn" id="zoomInBtn" title="放大">+</div>
+            <div class="zoom-btn" id="zoomOutBtn" title="缩小">−</div>
+        </div>
+    </div>
+ 
+    <script>
+        (function() {
+            const canvas = document.getElementById('canvas');
+            const ctx = canvas.getContext('2d');
+ 
+            const val1DOM = document.getElementById('val1');
+            const val2DOM = document.getElementById('val2');
+            const val3DOM = document.getElementById('val3');
+            const sumExprDOM = document.getElementById('sum-expr');
+ 
+            // ---------- 顶点数据 ----------
+            // 初始三个顶点 (可拖动)
+            const basePts = [
+                { id: 1, label: 'A', x: 400, y: 150, color: '#ff00ff' }, // 品红
+                { id: 2, label: 'B', x: 200, y: 600, color: '#00ff00' }, // 绿
+                { id: 3, label: 'C', x: 700, y: 450, color: '#00ffff' }  // 青
+            ];
+ 
+            // 实际用于绘制的点 (会随缩放变化)
+            let pts = JSON.parse(JSON.stringify(basePts));
+ 
+            // 缩放比例 (相对于初始位置)
+            let zoomScale = 1.0;
+            const ZOOM_STEP = 1.15; // 每次缩放倍率
+            const MIN_SCALE = 0.25;
+            const MAX_SCALE = 3.0;
+ 
+            let draggingPoint = null;
+ 
+            // 工具: 两点距离
+            function dist(p1, p2) {
+                return Math.hypot(p1.x - p2.x, p1.y - p2.y);
+            }
+ 
+            // ---------- 核心: 计算角度 (严格保证和为180°) ----------
+            function computeAngles() {
+                const A = pts[0], B = pts[1], C = pts[2];
+                const a = dist(B, C);
+                const b = dist(A, C);
+                const c = dist(A, B);
+ 
+                function safeAcos(val) {
+                    return Math.acos(Math.min(1, Math.max(-1, val)));
+                }
+ 
+                let cosA = (b * b + c * c - a * a) / (2 * b * c);
+                cosA = Math.min(1, Math.max(-1, cosA));
+                let radA = safeAcos(cosA);
+ 
+                let cosB = (a * a + c * c - b * b) / (2 * a * c);
+                cosB = Math.min(1, Math.max(-1, cosB));
+                let radB = safeAcos(cosB);
+ 
+                let degA = radA * 180 / Math.PI;
+                let degB = radB * 180 / Math.PI;
+                let degC = 180 - degA - degB;
+ 
+                let floatA = degA;
+                let floatB = degB;
+                 
+                if (floatA < 0 && floatA > -1e-9) floatA = 0;
+                if (floatA > 180 && floatA < 180 + 1e-9) floatA = 180;
+                if (floatB < 0 && floatB > -1e-9) floatB = 0;
+                if (floatB > 180 && floatB < 180 + 1e-9) floatB = 180;
+ 
+                let intA = Math.round(floatA);
+                let intB = Math.round(floatB);
+                intA = Math.min(179, Math.max(1, intA));
+                intB = Math.min(179, Math.max(1, intB));
+                let intC = 180 - intA - intB;
+ 
+                if (intC < 0) {
+                    while (intC < 0 && intA > 1) { intA--; intC = 180 - intA - intB; }
+                    while (intC < 0 && intB > 1) { intB--; intC = 180 - intA - intB; }
+                }
+                if (intC > 180) {
+                    while (intC > 180 && intA < 179) { intA++; intC = 180 - intA - intB; }
+                    while (intC > 180 && intB < 179) { intB++; intC = 180 - intA - intB; }
+                }
+                intC = Math.min(180, Math.max(0, intC));
+ 
+                return { degA: intA, degB: intB, degC: intC };
+            }
+ 
+            // ---------- 绘制函数 ----------
+            function draw() {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+ 
+                const { degA, degB, degC } = computeAngles();
+ 
+                val1DOM.innerText = degA;
+                val2DOM.innerText = degB;
+                val3DOM.innerText = degC;
+                sumExprDOM.innerText = `${degA}° + ${degB}° + ${degC}°`;
+ 
+                drawVertexFeatures(pts[0], pts[2], pts[1], pts[0].color, pts[0].id, degA);
+                drawVertexFeatures(pts[1], pts[0], pts[2], pts[1].color, pts[1].id, degB);
+                drawVertexFeatures(pts[2], pts[1], pts[0], pts[2].color, pts[2].id, degC);
+ 
+                ctx.beginPath();
+                ctx.moveTo(pts[0].x, pts[0].y);
+                ctx.lineTo(pts[1].x, pts[1].y);
+                ctx.lineTo(pts[2].x, pts[2].y);
+                ctx.closePath();
+                ctx.lineWidth = 3;
+                ctx.strokeStyle = '#0000ff';
+                ctx.stroke();
+ 
+                for (let p of pts) {
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, 6, 0, Math.PI * 2);
+                    ctx.fillStyle = 'red';
+                    ctx.fill();
+                }
+            }
+ 
+            function drawVertexFeatures(pCenter, pPrev, pNext, color, id, deg) {
+                let dx1 = pPrev.x - pCenter.x;
+                let dy1 = pPrev.y - pCenter.y;
+                let d1 = Math.hypot(dx1, dy1) || 1;
+                let u1x = dx1 / d1;
+                let u1y = dy1 / d1;
+ 
+                let dx2 = pNext.x - pCenter.x;
+                let dy2 = pNext.y - pCenter.y;
+                let d2 = Math.hypot(dx2, dy2) || 1;
+                let u2x = dx2 / d2;
+                let u2y = dy2 / d2;
+ 
+                let bx = u1x + u2x;
+                let by = u1y + u2y;
+                let blen = Math.hypot(bx, by);
+                if (blen < 0.001) {
+                    bx = -u1y;
+                    by = u1x;
+                    blen = Math.hypot(bx, by) || 1;
+                }
+                bx /= blen;
+                by /= blen;
+ 
+                let angle1 = Math.atan2(dy1, dx1);
+                let angle2 = Math.atan2(dy2, dx2);
+                let crossProduct = dx1 * dy2 - dy1 * dx2;
+ 
+                let startAngle, endAngle;
+                if (crossProduct > 0) {
+                    startAngle = angle1;
+                    endAngle = angle2;
+                } else {
+                    startAngle = angle2;
+                    endAngle = angle1;
+                }
+ 
+                const radius = 45;
+ 
+                ctx.beginPath();
+                ctx.moveTo(pCenter.x, pCenter.y);
+                ctx.arc(pCenter.x, pCenter.y, radius, startAngle, endAngle);
+                ctx.closePath();
+                ctx.fillStyle = color;
+                ctx.globalAlpha = 0.5;
+                ctx.fill();
+                ctx.globalAlpha = 1.0;
+                ctx.strokeStyle = '#333';
+                ctx.lineWidth = 1;
+                ctx.stroke();
+ 
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+ 
+                ctx.fillStyle = '#000';
+                ctx.font = 'bold 16px Arial';
+                ctx.fillText(id, pCenter.x + bx * (radius * 0.55), pCenter.y + by * (radius * 0.55));
+ 
+                ctx.fillStyle = '#b22222';
+                ctx.font = 'bold 18px Arial';
+                ctx.fillText(`${deg}°`, pCenter.x + bx * (radius + 26), pCenter.y + by * (radius + 26));
+ 
+                ctx.fillStyle = '#333';
+                ctx.font = 'bold 22px Arial';
+                ctx.fillText(pCenter.label, pCenter.x - bx * 32, pCenter.y - by * 32);
+ 
+                ctx.textAlign = 'left';
+                ctx.textBaseline = 'alphabetic';
+            }
+ 
+            // ---------- 缩放逻辑 ----------
+            function getTriangleCenter() {
+                // 基于 basePts 计算中心 (basePts 是原始未缩放点)
+                const cx = (basePts[0].x + basePts[1].x + basePts[2].x) / 3;
+                const cy = (basePts[0].y + basePts[1].y + basePts[2].y) / 3;
+                return { cx, cy };
+            }
+ 
+            function applyZoom(newScale) {
+                // 限制范围
+                newScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, newScale));
+                if (Math.abs(newScale - zoomScale) < 0.001) return;
+                zoomScale = newScale;
+ 
+                const { cx, cy } = getTriangleCenter();
+ 
+                // 根据 basePts 缩放生成 pts
+                for (let i = 0; i < 3; i++) {
+                    pts[i].x = cx + (basePts[i].x - cx) * zoomScale;
+                    pts[i].y = cy + (basePts[i].y - cy) * zoomScale;
+                }
+ 
+                // 边界约束 (防止顶点跑出画布)
+                for (let p of pts) {
+                    p.x = Math.min(canvas.width - 20, Math.max(20, p.x));
+                    p.y = Math.min(canvas.height - 20, Math.max(20, p.y));
+                }
+ 
+                draw();
+            }
+ 
+            // 放大
+            function zoomIn() {
+                applyZoom(zoomScale * ZOOM_STEP);
+            }
+ 
+            // 缩小
+            function zoomOut() {
+                applyZoom(zoomScale / ZOOM_STEP);
+            }
+ 
+            // 绑定按钮事件
+            document.getElementById('zoomInBtn').addEventListener('click', zoomIn);
+            document.getElementById('zoomOutBtn').addEventListener('click', zoomOut);
+ 
+            // ---------- 坐标获取与命中检测 ----------
+            function getTouchPos(e) {
+                const rect = canvas.getBoundingClientRect();
+                if (e.type.includes('touch')) {
+                    const touch = e.touches[0] || e.changedTouches[0];
+                    return {
+                        x: touch.clientX - rect.left,
+                        y: touch.clientY - rect.top
+                    };
+                } else {
+                    return {
+                        x: e.clientX - rect.left,
+                        y: e.clientY - rect.top
+                    };
+                }
+            }
+ 
+            function isPointHit(point, x, y) {
+                return Math.hypot(point.x - x, point.y - y) < 30;
+            }
+ 
+            // ---------- 事件绑定 ----------
+            canvas.addEventListener('mousedown', (e) => {
+                const pos = getTouchPos(e);
+                for (let p of pts) {
+                    if (isPointHit(p, pos.x, pos.y)) {
+                        draggingPoint = p;
+                        break;
+                    }
+                }
+            });
+ 
+            canvas.addEventListener('mousemove', (e) => {
+                if (draggingPoint) {
+                    const pos = getTouchPos(e);
+                    draggingPoint.x = Math.min(canvas.width - 10, Math.max(10, pos.x));
+                    draggingPoint.y = Math.min(canvas.height - 10, Math.max(10, pos.y));
+                     
+                    // 同步更新 basePts (使得拖动后缩放基准跟随)
+                    const index = pts.indexOf(draggingPoint);
+                    if (index !== -1) {
+                        // 反向计算 base 坐标: 根据当前缩放比例还原
+                        const { cx, cy } = getTriangleCenter();
+                        // 注意: getTriangleCenter 是基于 basePts 的, 但拖动后 basePts 也会更新, 需要先更新 basePts 再重算中心
+                        // 这里简化处理: 拖动时直接修改 basePts 的对应点, 然后重新计算中心并同步所有点
+                        // 更好的方式: 拖动结束后再统一处理, 但为了流畅, 拖动时直接修改 basePts 并重新计算 pts
+                        // 这样缩放中心也会跟着移动, 但这是合理的.
+                         
+                        // 更新 basePts
+                        basePts[index].x = draggingPoint.x;
+                        basePts[index].y = draggingPoint.y;
+                         
+                        // 重新计算中心并更新所有点 (保持缩放比例)
+                        const newCenter = getTriangleCenter();
+                        for (let i = 0; i < 3; i++) {
+                            pts[i].x = newCenter.cx + (basePts[i].x - newCenter.cx) * zoomScale;
+                            pts[i].y = newCenter.cy + (basePts[i].y - newCenter.cy) * zoomScale;
+                        }
+                        // 约束
+                        for (let p of pts) {
+                            p.x = Math.min(canvas.width - 20, Math.max(20, p.x));
+                            p.y = Math.min(canvas.height - 20, Math.max(20, p.y));
+                        }
+                    }
+                     
+                    draw(); 
+                }
+            });
+ 
+            canvas.addEventListener('mouseup', () => { draggingPoint = null; });
+            canvas.addEventListener('mouseleave', () => { draggingPoint = null; });
+ 
+            canvas.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                const pos = getTouchPos(e);
+                for (let p of pts) {
+                    if (isPointHit(p, pos.x, pos.y)) {
+                        draggingPoint = p;
+                        break;
+                    }
+                }
+            });
+ 
+            canvas.addEventListener('touchmove', (e) => {
+                e.preventDefault();
+                if (draggingPoint) {
+                    const pos = getTouchPos(e);
+                    draggingPoint.x = Math.min(canvas.width - 10, Math.max(10, pos.x));
+                    draggingPoint.y = Math.min(canvas.height - 10, Math.max(10, pos.y));
+                     
+                    const index = pts.indexOf(draggingPoint);
+                    if (index !== -1) {
+                        basePts[index].x = draggingPoint.x;
+                        basePts[index].y = draggingPoint.y;
+                         
+                        const newCenter = getTriangleCenter();
+                        for (let i = 0; i < 3; i++) {
+                            pts[i].x = newCenter.cx + (basePts[i].x - newCenter.cx) * zoomScale;
+                            pts[i].y = newCenter.cy + (basePts[i].y - newCenter.cy) * zoomScale;
+                        }
+                        for (let p of pts) {
+                            p.x = Math.min(canvas.width - 20, Math.max(20, p.x));
+                            p.y = Math.min(canvas.height - 20, Math.max(20, p.y));
+                        }
+                    }
+                     
+                    draw(); 
+                }
+            });
+ 
+            canvas.addEventListener('touchend', () => { draggingPoint = null; });
+            canvas.addEventListener('touchcancel', () => { draggingPoint = null; });
+ 
+            // ---------- 自适应尺寸 ----------
+            function resize() {
+                canvas.width = canvas.parentElement.clientWidth;
+                canvas.height = canvas.parentElement.clientHeight;
+                 
+                // 重新计算中心并应用缩放
+                const { cx, cy } = getTriangleCenter();
+                for (let i = 0; i < 3; i++) {
+                    pts[i].x = cx + (basePts[i].x - cx) * zoomScale;
+                    pts[i].y = cy + (basePts[i].y - cy) * zoomScale;
+                }
+                // 约束
+                for (let p of pts) {
+                    p.x = Math.min(canvas.width - 20, Math.max(20, p.x));
+                    p.y = Math.min(canvas.height - 20, Math.max(20, p.y));
+                }
+                 
+                draw();
+            }
+ 
+            window.addEventListener('resize', resize);
+ 
+            // 初始化
+            setTimeout(() => {
+                resize();
+                // 确保初始缩放为1
+                zoomScale = 1.0;
+                applyZoom(1.0);
+            }, 50);
+        })();
+    </script>
+</body>
+</html>
